@@ -9,7 +9,11 @@ from collections import deque
 from skimage.color import rgb2gray
 from skimage.transform import resize
 from keras.models import Sequential
-from keras.layers import Convolution2D, Flatten, Dense
+from keras.layers import Convolution2D, Flatten, Dense, Activation
+
+#### EXTRA ############
+
+import matplotlib.pyplot as plt
 
 ENV_NAME = 'Pong-v0'  # Environment name
 FRAME_WIDTH = 84  # Resized frame width
@@ -86,15 +90,20 @@ class Agent():
         self.sess.run(self.update_target_network)
 
     def build_network(self):
+
+        print("Now we build the model")
         model = Sequential()
-        model.add(Convolution2D(32, 8, 8, subsample=(4, 4), activation='relu', input_shape=(STATE_LENGTH, FRAME_WIDTH, FRAME_HEIGHT)))
-        model.add(Convolution2D(64, 4, 4, subsample=(2, 2), activation='relu'))
-        model.add(Convolution2D(64, 3, 3, subsample=(1, 1), activation='relu'))
+        model.add(Convolution2D(32, (8,8), strides=(4, 4), padding='same',input_shape=(FRAME_WIDTH, FRAME_HEIGHT, STATE_LENGTH)))  #80*80*4
+        model.add(Activation('relu'))
+        model.add(Convolution2D(64, (4, 4), strides=(2, 2), padding='same'))
+        model.add(Activation('relu'))
+        model.add(Convolution2D(64, (3, 3), strides=(1, 1), padding='same'))
+        model.add(Activation('relu'))
         model.add(Flatten())
         model.add(Dense(512, activation='relu'))
         model.add(Dense(self.num_actions))
 
-        s = tf.placeholder(tf.float32, [None, STATE_LENGTH, FRAME_WIDTH, FRAME_HEIGHT])
+        s = tf.placeholder(tf.float32, [None, FRAME_WIDTH, FRAME_HEIGHT ,STATE_LENGTH])
         q_values = model(s)
 
         return s, q_values, model
@@ -122,7 +131,10 @@ class Agent():
         processed_observation = np.maximum(observation, last_observation)
         processed_observation = np.uint8(resize(rgb2gray(processed_observation), (FRAME_WIDTH, FRAME_HEIGHT), mode='reflect') * 255)
         state = [processed_observation for _ in range(STATE_LENGTH)]
-        return np.stack(state, axis=0)
+        #print state[0].shape, len(state)
+        final = np.stack(state, axis=2)
+        #print final.shape
+        return final
 
     def get_action(self, state):
         if self.epsilon >= random.random() or self.t < INITIAL_REPLAY_SIZE:
@@ -137,7 +149,15 @@ class Agent():
         return action
 
     def run(self, state, action, reward, terminal, observation):
-        next_state = np.append(state[1:, :, :], observation, axis=0)
+        #print "observation", observation[0].shape, state.shape
+        #plt.imshow(observation[0])
+        #plt.show()
+        observation = np.reshape(observation, (FRAME_WIDTH, FRAME_HEIGHT, 1))
+        #print "observation after reshape", observation.shape, state.shape
+        #plt.imshow(observation[:, :, 0])
+        #plt.show()
+
+        next_state = np.append(state[:, :, 1:], observation, axis=2)
 
         # Clip all positive rewards at 1 and all negative rewards at -1, leaving 0 rewards unchanged
         reward = np.clip(reward, -1, 1)
