@@ -1,8 +1,9 @@
 # coding:utf-8
-
+import argparse
 import os
 import gym
 import random
+import json
 import numpy as np
 import tensorflow as tf
 from collections import deque
@@ -11,43 +12,41 @@ from skimage.transform import resize
 from keras.models import Sequential
 from keras.layers import Convolution2D, Flatten, Dense, Activation
 
-#### EXTRA ############
-
-import matplotlib.pyplot as plt
-
-ENV_NAME = 'Pong-v0'  # Environment name
+ENV_NAME = 'Pong-v0'  # Environment name #Default
 FRAME_WIDTH = 84  # Resized frame width
 FRAME_HEIGHT = 84  # Resized frame height
-NUM_EPISODES = 12000  # Number of episodes the agent plays
+TOTAL_STEPS = 10000000
+NUM_EPISODES = 30000  # Number of episodes the agent plays
+EPOCH_LENGTH = 50000  # Steps of one epoch, perform 1 test per epoch
+TEST_LENGTH = 12000
 STATE_LENGTH = 4  # Number of most recent frames to produce the input to the network
 GAMMA = 0.99  # Discount factor
 EXPLORATION_STEPS = 1000000  # Number of steps over which the initial value of epsilon is linearly annealed to its final value
 INITIAL_EPSILON = 1.0  # Initial value of epsilon in epsilon-greedy
 FINAL_EPSILON = 0.1  # Final value of epsilon in epsilon-greedy
-INITIAL_REPLAY_SIZE = 20000  # Number of steps to populate the replay memory before training starts
+INITIAL_REPLAY_SIZE = 2000  # Number of steps to populate the replay memory before training starts
 NUM_REPLAY_MEMORY = 400000  # Number of replay memory the agent uses for training
 BATCH_SIZE = 32  # Mini batch size
 TARGET_UPDATE_INTERVAL = 10000  # The frequency with which the target network is updated
 TRAIN_INTERVAL = 4  # The agent selects 4 actions between successive updates
 LEARNING_RATE = 0.00025  # Learning rate used by RMSProp
 MOMENTUM = 0.95  # Momentum used by RMSProp
-MIN_GRAD = 0.01  # Constant added to the squared gradient in the denominator of the RMSProp update
+MIN_GRAD = 0.001  # Constant added to the squared gradient in the denominator of the RMSProp update
 SAVE_INTERVAL = 300000  # The frequency with which the network is saved
 NO_OP_STEPS = 30  # Maximum number of "do nothing" actions to be performed by the agent at the start of an episode
-LOAD_NETWORK = False
-TRAIN = True
+LOAD_NETWORK = True
 SAVE_NETWORK_PATH = 'saved_networks/' + ENV_NAME
 SAVE_SUMMARY_PATH = 'summary/' + ENV_NAME
 NUM_EPISODES_AT_TEST = 30  # Number of episodes the agent plays at test time
 
 
 class Agent():
-    def __init__(self, num_actions):
+    def __init__(self, num_actions, args):
         self.num_actions = num_actions
+        self.args = args
         self.epsilon = INITIAL_EPSILON
         self.epsilon_step = (INITIAL_EPSILON - FINAL_EPSILON) / EXPLORATION_STEPS
         self.t = 0
-
         # Parameters used for summary
         self.total_reward = 0
         self.total_q_max = 0
@@ -74,8 +73,8 @@ class Agent():
 
         self.sess = tf.InteractiveSession()
         self.saver = tf.train.Saver(q_network_weights)
-        self.summary_placeholders, self.update_ops, self.summary_op = self.setup_summary()
-        self.summary_writer = tf.summary.FileWriter(SAVE_SUMMARY_PATH, self.sess.graph)
+        #self.summary_placeholders, self.update_ops, self.summary_op = self.setup_summary()
+        #self.summary_writer = tf.summary.FileWriter(SAVE_SUMMARY_PATH, self.sess.graph)
 
         if not os.path.exists(SAVE_NETWORK_PATH):
             os.makedirs(SAVE_NETWORK_PATH)
@@ -131,10 +130,7 @@ class Agent():
         processed_observation = np.maximum(observation, last_observation)
         processed_observation = np.uint8(resize(rgb2gray(processed_observation), (FRAME_WIDTH, FRAME_HEIGHT), mode='reflect') * 255)
         state = [processed_observation for _ in range(STATE_LENGTH)]
-        #print state[0].shape, len(state)
-        final = np.stack(state, axis=2)
-        #print final.shape
-        return final
+        return np.stack(state, axis=2)
 
     def get_action(self, state):
         if self.epsilon >= random.random() or self.t < INITIAL_REPLAY_SIZE:
@@ -149,13 +145,9 @@ class Agent():
         return action
 
     def run(self, state, action, reward, terminal, observation):
-        #print "observation", observation[0].shape, state.shape
-        #plt.imshow(observation[0])
-        #plt.show()
+
         observation = np.reshape(observation, (FRAME_WIDTH, FRAME_HEIGHT, 1))
-        #print "observation after reshape", observation.shape, state.shape
-        #plt.imshow(observation[:, :, 0])
-        #plt.show()
+
 
         next_state = np.append(state[:, :, 1:], observation, axis=2)
 
@@ -185,17 +177,40 @@ class Agent():
         self.total_q_max += np.max(self.q_values.eval(feed_dict={self.s: [np.float32(state / 255.0)]}))
         self.duration += 1
 
-        if terminal:
+        if self.t % EPOCH_LENGTH == 0 and self.t != 0 and self.t > INITIAL_REPLAY_SIZE:
             # Write summary
-            if self.t >= INITIAL_REPLAY_SIZE:
-                stats = [self.total_reward, self.total_q_max / float(self.duration),
-                        self.duration, self.total_loss / (float(self.duration) / float(TRAIN_INTERVAL))]
-                for i in range(len(stats)):
-                    self.sess.run(self.update_ops[i], feed_dict={
-                        self.summary_placeholders[i]: float(stats[i])
-                    })
-                summary_str = self.sess.run(self.summary_op)
-                self.summary_writer.add_summary(summary_str, self.episode + 1)
+                
+            total_reward, avg_reward, total_q, avg_q =  self.test()
+
+            if not (os.path.isfile('logs/'+self.args['env']+'.json')):
+                with open('logs/'+self.args['env']+'.json','w') as f:
+                    d = dict()
+    
+                    d['total_reward'] = [total_reward]
+                    d['avg_reward'] = [avg_reward]
+                    d['total_q'] = [total_q]
+                    d['avg_q'] = [avg_q]
+                    json.dump(d, f)    
+            else:
+                with open('logs/'+self.args['env']+'.json','r') as f:
+                    d = json.load(f)
+                    d['total_reward'].append(total_reward)
+                    d['avg_reward'].append(avg_reward)
+                    d['total_q'].append(total_q)
+                    d['avg_q'].append(avg_q)
+                os.remove('logs/'+self.args['env']+'.json')
+
+                with open('logs/'+self.args['env']+'.json','w') as f:
+                    json.dump(d, f)
+            
+                #stats = [self.total_reward, self.total_q_max / float(self.duration),
+                #        self.duration, self.total_loss / (float(self.duration) / float(TRAIN_INTERVAL))]
+                #for i in range(len(stats)):
+                #    self.sess.run(self.update_ops[i], feed_dict={
+                #        self.summary_placeholders[i]: float(stats[i])
+                #    })
+                #summary_str = self.sess.run(self.summary_op)
+                #self.summary_writer.add_summary(summary_str, self.episode + 1)
 
             # Debug
             if self.t < INITIAL_REPLAY_SIZE:
@@ -204,16 +219,28 @@ class Agent():
                 mode = 'explore'
             else:
                 mode = 'exploit'
-            print('EPISODE: {0:6d} / TIMESTEP: {1:8d} / DURATION: {2:5d} / EPSILON: {3:.5f} / TOTAL_REWARD: {4:3.0f} / AVG_MAX_Q: {5:2.4f} / AVG_LOSS: {6:.5f} / MODE: {7}'.format(
-                self.episode + 1, self.t, self.duration, self.epsilon,
-                self.total_reward, self.total_q_max / float(self.duration),
-                self.total_loss / (float(self.duration) / float(TRAIN_INTERVAL)), mode))
+            print self.epsilon
+            print('EPOCH:',self.t/EPOCH_LENGTH,  '/ EPSILON:', self.epsilon, '/ TOTAL_REWARD:', total_reward, \
+            '/ AVG_REWARD:', avg_reward, '/ TOTAL_Q:', total_q, '/ AVG_MAX_Q:', avg_q)
 
-            self.total_reward = 0
-            self.total_q_max = 0
-            self.total_loss = 0
-            self.duration = 0
-            self.episode += 1
+        if terminal:
+           # Debug
+           if self.t < INITIAL_REPLAY_SIZE:
+              mode = 'random'
+           elif INITIAL_REPLAY_SIZE <= self.t < INITIAL_REPLAY_SIZE + EXPLORATION_STEPS:
+              mode = 'explore'
+           else:
+              mode = 'exploit'
+           print('EPISODE: {0:6d} / TIMESTEP: {1:8d} / DURATION: {2:5d} / EPSILON: {3:.5f} / TOTAL_REWARD: {4:3.0f} / AVG_MAX_Q: {5:2.4f} / AVG_LOSS: {6:.5f} / MODE: {7}'.format(
+           self.episode + 1, self.t, self.duration, self.epsilon,
+           self.total_reward, self.total_q_max / float(self.duration),
+           self.total_loss / (float(self.duration) / float(TRAIN_INTERVAL)), mode))
+
+           self.total_reward = 0
+           self.total_q_max = 0
+           self.total_loss = 0
+           self.duration = 0
+           self.episode += 1
 
         self.t += 1
 
@@ -239,8 +266,10 @@ class Agent():
         # Convert True to 1, False to 0
         terminal_batch = np.array(terminal_batch) + 0
 
-        target_q_values_batch = self.target_q_values.eval(feed_dict={self.st: np.float32(np.array(next_state_batch) / 255.0)})
-        y_batch = reward_batch + (1 - terminal_batch) * GAMMA * np.max(target_q_values_batch, axis=1)
+        next_action_batch = np.argmax(self.q_values.eval(feed_dict={self.s: np.array(next_state_batch) / 255.0}), axis=1)
+        target_q_values_batch = self.target_q_values.eval(feed_dict={self.st:np.array (next_state_batch) / 255.0})
+        for i in xrange(len(minibatch)):
+            y_batch.append(reward_batch[i] + (1 - terminal_batch[i]) * GAMMA * target_q_values_batch[i][next_action_batch[i]])
 
         loss, _ = self.sess.run([self.loss, self.grads_update], feed_dict={
             self.s: np.float32(np.array(state_batch) / 255.0),
@@ -250,23 +279,8 @@ class Agent():
 
         self.total_loss += loss
 
-    def setup_summary(self):
-        episode_total_reward = tf.Variable(0.)
-        tf.summary.scalar(ENV_NAME + '/Total Reward/Episode', episode_total_reward)
-        episode_avg_max_q = tf.Variable(0.)
-        tf.summary.scalar(ENV_NAME + '/Average Max Q/Episode', episode_avg_max_q)
-        episode_duration = tf.Variable(0.)
-        tf.summary.scalar(ENV_NAME + '/Duration/Episode', episode_duration)
-        episode_avg_loss = tf.Variable(0.)
-        tf.summary.scalar(ENV_NAME + '/Average Loss/Episode', episode_avg_loss)
-        summary_vars = [episode_total_reward, episode_avg_max_q, episode_duration, episode_avg_loss]
-        summary_placeholders = [tf.placeholder(tf.float32) for _ in range(len(summary_vars))]
-        update_ops = [summary_vars[i].assign(summary_placeholders[i]) for i in range(len(summary_vars))]
-        summary_op = tf.summary.merge_all()
-        return summary_placeholders, update_ops, summary_op
-
     def load_network(self):
-        checkpoint = tf.train.get_checkpoint_state(SAVE_NETWORK_PATH)
+        checkpoint = tf.train.get_checkpoint_state(self.args['load'])
         if checkpoint and checkpoint.model_checkpoint_path:
             self.saver.restore(self.sess, checkpoint.model_checkpoint_path)
             print('Successfully loaded: ' + checkpoint.model_checkpoint_path)
@@ -275,27 +289,91 @@ class Agent():
 
     def get_action_at_test(self, state):
         if random.random() <= 0.05:
-            action = random.randrange(self.num_actions)
+            action, max_q = random.randrange(self.num_actions), None
         else:
-            action = np.argmax(self.q_values.eval(feed_dict={self.s: [np.float32(state / 255.0)]}))
+            values = self.q_values.eval(feed_dict={self.s: [np.float32(state / 255.0)]})
+            action, max_q = np.argmax(values), np.max(values)
 
         self.t += 1
 
-        return action
+        return action, max_q
+    def test(self):
+        # env.monitor.start(ENV_NAME + '-test')
+        ENV_NAME = self.args['env'] # Atari game to be played!
+        
+        env = gym.make(ENV_NAME)
+        
+        test_ep = 0 
+        total_reward = 0
+        total_q = 0
 
+        cont_q = 0
+        cont_ep = 0
+        
+        while test_ep < TEST_LENGTH:
+            ep_reward = 0
+            terminal = False
+            observation = env.reset()
+            for _ in range(random.randint(1, NO_OP_STEPS)):
+                last_observation = observation
+                observation, _, _, _ = env.step(0)  # Do nothing
+            state = self.get_initial_state(observation, last_observation)
+            while not terminal:
+                last_observation = observation
+                action, max_q = self.get_action_at_test(state)
+
+                if max_q != None:
+                    total_q += max_q
+                    cont_q += 1
+            
+                observation, reward, terminal, _ = env.step(action)
+                ep_reward+=reward
+
+                if (self.args['render']):
+                   env.render()
+
+                processed_observation = preprocess(observation, last_observation)
+                #print state.shape, processed_observation.shape
+                state = np.append(state[:, :, 1:], processed_observation, axis=2)
+
+                if(test_ep>TEST_LENGTH):
+                    break
+                
+                test_ep+=1
+                    
+            total_reward += ep_reward
+            cont_ep += 1
+            
+        # env.monitor.close()
+        return total_reward, total_reward/cont_ep, total_q, total_q/cont_q #Returns totRew, avgRew, totQ, avgQ
+        
 
 def preprocess(observation, last_observation):
     processed_observation = np.maximum(observation, last_observation)
     processed_observation = np.uint8(resize(rgb2gray(processed_observation), (FRAME_WIDTH, FRAME_HEIGHT), mode='reflect') * 255)
-    return np.reshape(processed_observation, (FRAME_WIDTH, FRAME_HEIGHT, 1))
+    return np.reshape(processed_observation,  (FRAME_WIDTH, FRAME_HEIGHT, 1))
 
 
 def main():
-    env = gym.make(ENV_NAME)
-    agent = Agent(num_actions=env.action_space.n)
 
+    parser = argparse.ArgumentParser(description='Train agent to play Atari games from raw input')
+    parser.add_argument('-e', '--env', help='Atari game to play!', required=False, default='Pong-v0')
+    parser.add_argument('-m', '--mode', help='Train / Test', required=True, default='Train')
+    parser.add_argument('-r', '--render', help='Render the game', required=False, default=False)
+    parser.add_argument('-l', '--load', help='Load weights the game', required=False, default=SAVE_NETWORK_PATH)
+    args = vars(parser.parse_args())
+
+    ENV_NAME = args['env'] # Atari game to be played!
+    TRAIN = True if args['mode'] == 'Train' else False # Select either to train or not
+
+    
+    env = gym.make(ENV_NAME)
+    agent = Agent(num_actions=env.action_space.n, args = args)
+
+    ep = 0
+    
     if TRAIN:  # Train mode
-        for _ in range(NUM_EPISODES):
+        while  (ep <= NUM_EPISODES):
             terminal = False
             observation = env.reset()
             for _ in range(random.randint(1, NO_OP_STEPS)):
@@ -305,32 +383,36 @@ def main():
             while not terminal:
                 last_observation = observation
                 action = agent.get_action(state)
-                observation, reward, terminal, _ = env.step(action)
+                observation, reward, terminal, _ = env.step(action) 
                 # env.render()
                 processed_observation = preprocess(observation, last_observation)
                 state = agent.run(state, action, reward, terminal, processed_observation)
+
+                if agent.t > TOTAL_STEPS:
+                    ep = NUM_EPISODES + 1
+                    break
+            ep+=1 #Increment episode counter  
+                
     else:  # Test mode
-	reward = 0
+
+        agent.test()
+
         # env.monitor.start(ENV_NAME + '-test')
-        for _ in range(NUM_EPISODES_AT_TEST):
-            terminal = False
-            observation = env.reset()
-            for _ in range(random.randint(1, NO_OP_STEPS)):
-                last_observation = observation
-                observation, r, _, _ = env.step(0)  # Do nothing
-		reward+=r
-            state = agent.get_initial_state(observation, last_observation)
-            while not terminal:
-                last_observation = observation
-                action = agent.get_action_at_test(state)
-                observation, r, terminal, _ = env.step(action)
-		reward += r
-                #env.render()
-                processed_observation = preprocess(observation, last_observation)
-		#print processed_observation.shape, state.shape
-		state = np.append(state[:, :, 1:], processed_observation, axis=2)
-            print reward
-	# env.monitor.close()
+        #for _ in range(NUM_EPISODES_AT_TEST):
+        #    terminal = False
+        #    observation = env.reset()
+        #    for _ in range(random.randint(1, NO_OP_STEPS)):
+        #        last_observation = observation
+        #        observation, _, _, _ = env.step(0)  # Do nothing
+        #    state = agent.get_initial_state(observation, last_observation)
+        #    while not terminal:
+        #        last_observation = observation
+        #        action = agent.get_action_at_test(state)
+        #        observation, _, terminal, _ = env.step(action)
+        #        env.render()
+        #        processed_observation = preprocess(observation, last_observation)
+        #        state = np.append(state[1:, :, :], processed_observation, axis=0)
+        # env.monitor.close()
 
 
 if __name__ == '__main__':
