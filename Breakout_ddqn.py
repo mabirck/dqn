@@ -12,6 +12,10 @@ from skimage.transform import resize
 from keras.models import Sequential
 from keras.layers import Convolution2D, Flatten, Dense, Activation
 
+from  scipy.misc import imrotate
+import matplotlib.pyplot as plt
+
+
 ENV_NAME = 'Breakout-v0'  # Environment name #Default
 FRAME_WIDTH = 84  # Resized frame width
 FRAME_HEIGHT = 84  # Resized frame height
@@ -147,7 +151,9 @@ class Agent():
     def run(self, state, action, reward, terminal, observation):
 
         observation = np.reshape(observation, (FRAME_WIDTH, FRAME_HEIGHT, 1))
-
+	
+	#plt.imshow(observation)
+	#plt.show()
 
         next_state = np.append(state[:, :, 1:], observation, axis=2)
 
@@ -351,6 +357,7 @@ class Agent():
 def preprocess(observation, last_observation):
     processed_observation = np.maximum(observation, last_observation)
     processed_observation = np.uint8(resize(rgb2gray(processed_observation), (FRAME_WIDTH, FRAME_HEIGHT), mode='reflect') * 255)
+    processed_observation = imrotate(processed_observation, 90)
     return np.reshape(processed_observation,  (FRAME_WIDTH, FRAME_HEIGHT, 1))
 
 

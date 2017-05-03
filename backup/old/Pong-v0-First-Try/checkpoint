@@ -1,0 +1,6 @@
+model_checkpoint_path: "Pong-v0-12000000"
+all_model_checkpoint_paths: "Pong-v0-10800000"
+all_model_checkpoint_paths: "Pong-v0-11100000"
+all_model_checkpoint_paths: "Pong-v0-11400000"
+all_model_checkpoint_paths: "Pong-v0-11700000"
+all_model_checkpoint_paths: "Pong-v0-12000000"
